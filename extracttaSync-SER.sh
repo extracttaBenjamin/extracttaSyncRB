@@ -1,28 +1,33 @@
 #!/usr/bin/env bash
-# ExtracttaSync Service Engine Report
+# ExtracttaSync Service Engine Report (Distro-Agnostic)
+
 MONGO_URI=$1
 MODE=$2
 HOST=$(hostname)
 DATE=$(date +"%Y-%m-%dT%H:%M:%S%z")
 
 get_logs() {
-    local path=$1
-    [[ -f "$path" ]] && tail -n 10 "$path" | jq -R -s -c --arg d "$DATE" 'split("\n") | map(select(length > 0) | {logTime: $d, message: .})' || echo "[]"
+    local p=$1
+    [[ -f "$p" ]] && tail -n 10 "$p" | jq -R -s -c --arg d "$DATE" 'split("\n") | map(select(length > 0) | {logTime: $d, message: .})' || echo "[]"
 }
 
 gen_json() {
     local svc=$1
+    # Captura agnóstica via systemctl show [cite: 3, 4, 5]
     local id=$(systemctl show "$svc" -p Id --value)
     local state=$(systemctl show "$svc" -p ActiveState --value)
-    local restarts=$(systemctl show "$svc" -p NRestarts --value) [cite: 5, 12]
-    local env_file=$(systemctl cat "$svc" | grep "^EnvironmentFile=" | cut -d'=' -f2 | tr -d '-') [cite: 67]
-    local log_p=$(grep "^LOG_FILE=" "$env_file" 2>/dev/null | cut -d'=' -f2 | tr -d '"\r')
+    local sub=$(systemctl show "$svc" -p SubState --value)
+    local restarts=$(systemctl show "$svc" -p NRestarts --value) [cite: 19]
+    
+    # Busca o arquivo de log no EnvironmentFile [cite: 67]
+    local env_f=$(systemctl cat "$svc" | grep "^EnvironmentFile=" | cut -d'=' -f2 | tr -d '-')
+    local log_p=$(grep "^LOG_FILE=" "$env_f" 2>/dev/null | cut -d'=' -f2 | tr -d '"\r')
 
-    echo "{\"service\": \"${id%.service}\", \"state\": \"$state\", \"restarts\": $restarts, \"logs\": $(get_logs "$log_p")}"
+    echo "{\"service\": \"${id%.service}\", \"state\": \"$state($sub)\", \"restarts\": $restarts, \"logs\": $(get_logs "$log_p")}"
 }
 
-# Agregação [cite: 21, 22]
-SERVICES=$(systemctl list-units --type=service --all | awk '{print $1}' | grep -E "MongoSync|ExtracttaSync")
+SERVICES=$(systemctl list-units --type=service --all | awk '{print $1}' | grep -E "MongoSync|ExtracttaSync") [cite: 2, 21]
+
 JSON="{\"host\": \"$HOST\", \"reportDate\": \"$DATE\", \"services\": ["
 first=1
 for s in $SERVICES; do
@@ -32,7 +37,7 @@ for s in $SERVICES; do
 done
 JSON+="]}"
 
-# Saídas conforme MODE [cite: 13, 14, 36]
+# Saídas [cite: 13, 14, 16]
 [[ "$MODE" == "S" || "$MODE" == "A" ]] && echo "$JSON" | jq .
 [[ "$MODE" == "F" || "$MODE" == "A" ]] && echo "$JSON" > "ExtracttaSync-$HOST-Report.rpt"
-[[ "$MODE" == "M" || "$MODE" == "A" ]] && echo "$JSON" | mongosh "$MONGO_URI" --quiet --eval "db.fullServicesReportByHost.insertOne(JSON.parse(stdin.read()))" >/dev/null
+[[ "$MODE" == "M" || "$MODE" == "A" ]] && echo "$JSON" | mongosh "$MONGO_URI" --quiet --eval "db.fullServicesReportByHost.insertOne(JSON.parse(stdin.read()))" >/dev/null [cite: 36]
