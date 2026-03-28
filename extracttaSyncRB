@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# ExtracttaSyncRB - Extractta Sync Report Builder
+
+CONF="/opt/extracttaSyncRB/config.env"
+SER_SCRIPT="/opt/extracttaSyncRB/extracttaSync-SER.sh"
+RB_LOG="/opt/extracttaSync/logs/ExtracttaSyncReport.log"
+[[ -f "$CONF" ]] && source "$CONF"
+
+log_rb() { echo "$(date '+%Y-%m-%d %H:%M:%S') - [RB] $1" >> "$RB_LOG"; }
+
+usage() {
+    echo "Uso: extracttaSyncRB -f <all|localhost|alias> -o <S|F|M|A>"
+    exit 1
+}
+
+# Parse de Argumentos [cite: 13, 14, 15]
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -f|--from) FROM="$2"; shift 2 ;;
+        -o|--outputMode) MODE="$2"; shift 2 ;;
+        *) usage ;;
+    esac
+done
+
+[[ -z "$FROM" || -z "$MODE" ]] && usage
+
+execute_task() {
+    local target=$1
+    log_rb "Processando alvo: $target"
+    if [[ "$target" == "localhost" ]]; then
+        bash "$SER_SCRIPT" "$MONGO_URI" "$MODE"
+    else
+        # Disparo remoto via SSH enviando o script local para o buffer do bash remoto
+        ssh -q "$target" "bash -s" -- "$MONGO_URI" "$MODE" < "$SER_SCRIPT"
+    fi
+}
+
+# Identificação de Hosts via .ssh/config 
+case "$FROM" in
+    "all")
+        execute_task "localhost"
+        for h in $(grep -i "^Host ExtracttaSync" "$HOME/.ssh/config" | awk '{print $2}'); do
+            execute_task "$h"
+        done
+        ;;
+    *) execute_task "$FROM" ;;
+esac
